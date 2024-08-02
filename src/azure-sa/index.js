@@ -5,6 +5,7 @@ const path = require('path');
 require('dotenv').config();
 
 const { BlobServiceClient, StorageSharedKeyCredential } = require('@azure/storage-blob');
+const { MongoClient, ObjectId } = require('mongodb');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -23,21 +24,21 @@ const blobServiceClient = new BlobServiceClient(
 
 const containerClient = blobServiceClient.getContainerClient(process.env.AZURE_CONTAINER_NAME);
 
-const filesDataPath = './filesData.json';
+const client = new MongoClient(process.env.MONGODB_URI);
+let db, filesCollection;
 
-const loadFilesData = () => {
-    if (fs.existsSync(filesDataPath)) {
-        const data = fs.readFileSync(filesDataPath);
-        return JSON.parse(data);
+async function connectDB() {
+    try {
+        await client.connect();
+        db = client.db(process.env.MONGODB_DB_NAME);
+        filesCollection = db.collection('files');
+        console.log('Connected to MongoDB');
+    } catch (err) {
+        console.error('Error connecting to MongoDB:', err);
     }
-    return [];
-};
+}
 
-const saveFilesData = (files) => {
-    fs.writeFileSync(filesDataPath, JSON.stringify(files, null, 2));
-};
-
-let files = loadFilesData();
+connectDB();
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
@@ -56,8 +57,8 @@ app.post('/upload', upload.single('file'), async (req, res) => {
             await blockBlobClient.uploadFile(req.file.path);
             fs.unlinkSync(req.file.path); // remove the file locally after upload
 
-            files.push({ name: fileName, key: blobName });
-            saveFilesData(files);
+            const fileRecord = { name: fileName, key: blobName };
+            await filesCollection.insertOne(fileRecord);
 
             res.status(200).send('File uploaded successfully.');
         } catch (err) {
@@ -69,8 +70,14 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     }
 });
 
-app.get('/files', (req, res) => {
-    res.json(files);
+app.get('/files', async (req, res) => {
+    try {
+        const files = await filesCollection.find().toArray();
+        res.json(files);
+    } catch (err) {
+        console.error('Error fetching files:', err);
+        res.status(500).send('Failed to fetch files.');
+    }
 });
 
 app.delete('/files/:key', async (req, res) => {
@@ -80,8 +87,7 @@ app.delete('/files/:key', async (req, res) => {
         const blockBlobClient = containerClient.getBlockBlobClient(fileKey);
         await blockBlobClient.delete();
 
-        files = files.filter(file => file.key !== fileKey);
-        saveFilesData(files);
+        await filesCollection.deleteOne({ key: fileKey });
 
         res.status(200).send('File deleted successfully.');
     } catch (err) {
