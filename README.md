@@ -1,4 +1,4 @@
-# FileVault
+# FileVault 
 
 FileVault is a modern file uploading application with versions for both AWS S3 and Azure Blob Storage. It features a clean interface with light/dark mode toggle and file management capabilities.
 
